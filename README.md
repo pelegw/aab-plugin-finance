@@ -1,22 +1,26 @@
 # aab-plugin-finance
 
-The finance plugin for the [Agent Authority Broker](https://github.com/pelegw/agent-authority-broker)
-(the gateway): the owner's credit card (and later bank account) transactions,
-uploaded by the owner's own scraper, read and annotated by AI agents strictly
-inside the grants the broker hands this service with every call.
+This is the finance plugin for the
+[Agent Authority Broker](https://github.com/pelegw/agent-authority-broker).
+This document calls that project the gateway.
 
-It is an **external plugin package**: its own repository, installed into a
-running gateway from the console (Plugins, + Add plugin,
-`github.com/pelegw/aab-plugin-finance@v0.1.0`), never vendored into the gateway.
-The owner reviews and pins the manifest at install time; nothing here can
-widen it afterwards.
+The plugin keeps the owner's credit card transactions. Later it will also keep
+bank account transactions. The owner's own scraper uploads them. AI agents read
+and annotate them, strictly inside the grants that the broker sends to this
+service with every call.
 
-- Design (source of truth for the data model, ingest contract, manifest,
-  modules, security and tests): `C:\Users\Peleg\Documents\finance-plugin-plan.md`
-  sections 3.1-3.6 and 6.
-- Packaging and installation (this repository's shape, the descriptor, the
-  base image): `C:\Users\Peleg\.claude\plans\majestic-conjuring-dove.md`
-  ("Design" and "Phase 1").
+It is an **external plugin package**. It has its own repository. The owner
+installs it into a running gateway from the console: Plugins, + Add plugin,
+`github.com/pelegw/aab-plugin-finance@v0.1.0`. The gateway repository never
+contains a copy of it. The owner reviews and pins the manifest at install
+time. After that, nothing in this repository can widen the manifest.
+
+- Design: `C:\Users\Peleg\Documents\finance-plugin-plan.md`, sections 3.1-3.6
+  and 6. It is the source of truth for the data model, the ingest contract,
+  the manifest, the modules, security and tests.
+- Packaging and installation: `C:\Users\Peleg\.claude\plans\majestic-conjuring-dove.md`,
+  sections "Design" and "Phase 1". It describes the shape of this repository,
+  the descriptor and the base image.
 
 ## What it does
 
@@ -41,13 +45,21 @@ widen it afterwards.
 | `ingest_snapshot` | write, `[direct]` (resource `company`) | The scraper's chunked, idempotent upload |
 | `report_refresh` | write, `[direct]` | The scraper claims and finishes a refresh request |
 
-Amounts travel and are stored as integer hundredths (`*_x100`); results show
-units (`charged_amount: -123.45`; negative = purchase, positive = refund).
+Uploads and the database use integer hundredths for amounts (`*_x100`).
+Results show units, for example `charged_amount: -123.45`. A negative amount
+is a purchase. A positive amount is a refund.
 
-Narrowing is capability data in the broker: `selector: {card: [...]}` or
-`{account: [...]}`, and the constraints `date_window_days`, `detail`
-(`aggregate` = totals only), `notes` and `merchant_names` (false = opaque
-merchant ids). The two keys the plan starts with (section 2):
+The broker keeps each narrowing as capability data. A capability can narrow a
+key in these ways:
+
+- A selector: `selector: {card: [...]}` or `{account: [...]}`.
+- The constraint `date_window_days`.
+- The constraint `detail`. The value `aggregate` permits totals only.
+- The constraint `notes`.
+- The constraint `merchant_names`. The value `false` replaces merchant names
+  with opaque merchant ids.
+
+The plan starts with these two keys (section 2).
 
 ```json
 {"name": "mac-mini-scraper", "role": "read-act", "capabilities": [
@@ -60,25 +72,34 @@ merchant ids). The two keys the plan starts with (section 2):
 
 ## Security properties
 
-- Visibility is applied inside every SQL query, aggregates included: a hidden
-  card, account or transaction (owner-hidden or a key's own deny), a card
-  outside the capability's selector (`allow_only`, where `[]` means none), a
-  denied company and rows outside the date window are never read, so they can
-  neither appear in a list nor move a total. Hidden == missing: one 404.
-- Scope parsing fails closed: a malformed scope or an undeclared constraint
-  is a 400, never "unrestricted".
-- `ingest_snapshot` is bound to the `company` resource: hiding a card does not
-  stop its uploads (the record stays complete) while every read of it stays
-  404. A compromised scraper key can write rows and handle refresh requests,
-  but cannot read transactions.
-- No credential exists in this plugin (`connection.kind: none`,
-  `config_schema: []`; `/secrets` stays empty). The database path is
-  container env, not configurable over the network.
-- Logs carry actions, statuses, run ids, chunk indexes, row counts and
-  refresh ids; never descriptions, amounts, keys, tx ids, notes or source
-  ids. `tests/test_logging.py` sweeps DEBUG output for planted values.
-- Writes are single `BEGIN IMMEDIATE` transactions: anything failing before
-  COMMIT is rolled back and answered 503 (not performed, safe to retry).
+- The plugin applies visibility inside every SQL query, aggregates included.
+  The queries never read the rows below, so these rows cannot appear in a list
+  or move a total:
+  - A hidden card, account or transaction. The owner hid it, or the key's own
+    grant denies it.
+  - A card outside the capability's selector (`allow_only`). The empty list
+    `[]` means no card.
+  - A denied company.
+  - Rows outside the date window.
+
+  Hidden == missing: the plugin gives the same 404 for both.
+- Scope parsing fails closed. A malformed scope or an undeclared constraint
+  gets a 400. It never means "unrestricted".
+- In the manifest, the resource of `ingest_snapshot` is `company`. When the
+  owner hides a card, uploads for that card continue, so the record stays
+  complete. Every read of the hidden card still gets a 404. A compromised
+  scraper key can write rows and handle refresh requests, but it cannot read
+  transactions.
+- This plugin holds no credential: `connection.kind: none` and
+  `config_schema: []`, and `/secrets` stays empty. The database path comes
+  from the container environment. No call over the network can change it.
+- Logs carry actions, statuses, run ids, chunk indexes, row counts and refresh
+  ids. Logs never carry descriptions, amounts, row keys, tx ids, notes or
+  source ids. `tests/test_logging.py` sweeps the DEBUG output for planted
+  values.
+- Each write is one `BEGIN IMMEDIATE` database transaction. If anything fails
+  before COMMIT, the plugin rolls the write back and answers 503. A 503 means
+  that the plugin did nothing, and a retry is safe.
 
 ## Layout
 
@@ -92,14 +113,14 @@ tools/replay_raw.py        first bulk load from cred-analysis data/raw/*.json
 ```
 
 The data lives in the container's own `finance_data` volume
-(`/data/finance.db`, SQLite, WAL). Back it up like the gateway's other data
-volumes: it is the source of record.
+(`/data/finance.db`, SQLite, WAL). This database is the source of record.
+Back it up like the other data volumes of the gateway.
 
 ## Development
 
-The runtime (`aab-plugin-runtime`) and, for some tests, the broker come from
-a gateway checkout. `AAB_SRC` names it; the default is the sibling directory
-`../agent-authority-broker`.
+The runtime (`aab-plugin-runtime`) comes from a gateway checkout. Some tests
+also need the broker from that checkout. `AAB_SRC` names the checkout. The
+default is the sibling directory `../agent-authority-broker`.
 
 ```bash
 python -m venv .venv            # Python 3.12+
@@ -108,13 +129,17 @@ AAB_SRC=${AAB_SRC:-../agent-authority-broker}
 .venv/Scripts/pip install -e "$AAB_SRC/broker"                       # tests only
 ```
 
-Why the runtime is not pulled from `pyproject.toml` here: it is declared as
-`aab-plugin-runtime>=0.2.0,<1`, satisfied by the editable checkout above and
-by the base image in the container. The git URL at the gateway tag is the
-`runtime` extra (`pip install ".[runtime]"`) for a standalone install. A
-direct-URL dependency would be re-resolved by pip even with a runtime
-already installed (conflicting with the checkout, and making the Docker
-build clone a private repository).
+The steps above do not install the runtime from `pyproject.toml`, for these
+reasons:
+
+- `pyproject.toml` declares the runtime as `aab-plugin-runtime>=0.2.0,<1`.
+  The editable checkout above satisfies that range. The base image in the
+  container satisfies it too.
+- For a standalone install, the `runtime` extra holds the git URL at the
+  gateway tag: `pip install ".[runtime]"`.
+- A direct-URL dependency would make pip resolve the URL again, even with a
+  runtime already installed. That would conflict with the checkout. It would
+  also make the Docker build clone a private repository.
 
 ```bash
 .venv/Scripts/python -m pytest --ignore=tests/integration      # unit
@@ -122,51 +147,69 @@ AAB_SRC=../agent-authority-broker .venv/Scripts/python -m pytest tests/integrati
 .venv/Scripts/python -m pytest                                  # both
 ```
 
-The integration tests are skipped when no gateway checkout is found
-(`AAB_REQUIRE_GATEWAY=1` turns that into an error, as in CI). They register
-the adapter in the gateway's registry through its test seam
-(`Registry(vendored_dirs=...)` with this manifest standing in for the owner's
-pin), in process and over the plugin API, and run the plan's key A / key B
-scenarios, hidden-card 404s, the draft refresh approval and the MCP tool list.
+Without a gateway checkout, pytest skips the integration tests.
+`AAB_REQUIRE_GATEWAY=1` makes a missing checkout an error, as in CI. The
+integration tests register the adapter in the gateway's registry through its
+test seam, `Registry(vendored_dirs=...)`. In that seam, this manifest takes
+the place of the owner's pin. The tests register the adapter in process and
+over the plugin API. Then they run these scenarios from the plan:
+
+- The key A and key B scenarios.
+- The 404 for a hidden card.
+- The approval of a draft refresh request.
+- The MCP tool list.
 
 Two optional cross-checks run when Node and a cred-analysis checkout are
-present (`CRED_ANALYSIS_SRC`, default `../cred-analysis`): the aggregates
-against the real `analysis.js`, and the replay tool's row keys against the
-real `normalize.js`.
+present. `CRED_ANALYSIS_SRC` names the checkout. The default is
+`../cred-analysis`. The cross-checks are:
+
+- The aggregates against the real `analysis.js`.
+- The row keys of the replay tool against the real `normalize.js`.
 
 ## First bulk load: tools/replay_raw.py
 
-Uploads cred-analysis's raw snapshots through the broker with key A, in
-`scrapedAt` order, in chunks of 400, with the same row keys the scraper's
-normalizer produces (so later uploads merge with them). Standard library
-only; prints run ids and counts, never transactions or the key.
+This tool uploads the raw snapshots of cred-analysis through the broker with
+key A. It sends the snapshots in `scrapedAt` order, in chunks of 400 rows. It
+uses the same row keys that the scraper's normalizer makes, so later uploads
+merge with these rows. The tool uses only the standard library. It prints run
+ids and counts. It never prints transactions or the key.
 
 ```bash
 python tools/replay_raw.py --raw ../cred-analysis/data/raw --dry-run
 AAB_KEY=aab_... python tools/replay_raw.py --raw ../cred-analysis/data/raw --url https://aab.example.com
 ```
 
-Dates are converted in this machine's local time zone, exactly as
-cred-analysis did when it built the workbook (`--tz` overrides; on Windows
-that needs `pip install tzdata`). Retries 503/429 with backoff, resends on
-502/504 (the chunk hash makes that idempotent), stops on any other error.
-Replayed into a local database, the owner's raw snapshots give the same row
-count and the same yearly net total as the owner's workbook.
+The tool converts dates in the local time zone of this machine, exactly as
+cred-analysis did when it built the workbook. `--tz` sets another zone. On
+Windows, `--tz` needs `pip install tzdata`. The tool handles errors as
+follows:
+
+- On 503 or 429, it retries with backoff.
+- On 502 or 504, it sends the chunk again. The chunk hash makes that
+  idempotent.
+- On any other error, it stops.
+
+A replay of the owner's raw snapshots into a local database gives the same
+row count and the same yearly net total as the owner's workbook.
 
 ## CI
 
 `.github/workflows/ci.yml` runs the unit and integration suites against a
-gateway checkout, and builds the image against the base image. Both need the
-repository secret **`GATEWAY_TOKEN`**: a classic personal access token with
-`repo` (to check out the private gateway) and `read:packages` (to pull the
-private base image from GHCR). Without it the jobs pass but say, in a warning
-annotation and the job summary, that nothing ran; CI is meaningful only once
-the secret exists. The gateway ref defaults to the runtime tag `v0.3.0`; set
-the repository variable `GATEWAY_REF` (for example `dev`) to test against
-another ref before that tag is published.
+gateway checkout. It also builds the image against the base image. Both jobs
+need the repository secret **`GATEWAY_TOKEN`**. This secret is a classic
+personal access token with these permissions:
+
+- `repo`, to check out the private gateway.
+- `read:packages`, to pull the private base image from GHCR.
+
+Without the secret, the jobs pass. A warning annotation and the job summary
+then say that nothing ran. CI has meaning only when the secret exists. The
+default gateway ref is the runtime tag `v0.3.0`. To test against another ref
+before the gateway publishes that tag, set the repository variable
+`GATEWAY_REF`, for example to `dev`.
 
 ## Versions
 
-The package version lives only in `VERSION`. The manifest's `version` moves
-with every change to actions, narrowings or constraints (the owner re-pins
-on upgrade).
+The package version lives only in `VERSION`. The manifest has its own
+`version`. It changes with every change to actions, narrowings or
+constraints. On an upgrade, the owner pins the manifest again.
