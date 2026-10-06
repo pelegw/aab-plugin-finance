@@ -3,6 +3,13 @@
 This file records all notable changes to this project. The version number
 lives only in `VERSION`.
 
+## [Unreleased]
+
+### Added
+- `LICENSE`: the plugin is released under the GNU Affero General Public
+  License, version 3 or later (`AGPL-3.0-or-later`), with the license
+  classifier in the package metadata and a License section in the README.
+
 ## [0.1.0] - unreleased (tagged at install, plan phase 2)
 
 ### Added

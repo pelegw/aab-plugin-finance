@@ -213,3 +213,14 @@ before the gateway publishes that tag, set the repository variable
 The package version lives only in `VERSION`. The manifest has its own
 `version`. It changes with every change to actions, narrowings or
 constraints. On an upgrade, the owner pins the manifest again.
+
+## License
+
+Copyright (C) 2026 Peleg Wasserman.
+
+This program is free software. You can redistribute it and modify it under
+the GNU Affero General Public License, version 3 or any later version. See
+[LICENSE](LICENSE) for the full text. If you run a modified version as a
+service, you must offer its source to the users of that service. A
+commercial license for uses the AGPL does not fit is available from the
+author.

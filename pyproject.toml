@@ -3,6 +3,7 @@ name = "aab-plugin-finance"
 dynamic = ["version"]   # single source: VERSION at the repo root
 description = "Finance plugin service for the Agent Authority Broker (card and bank transactions)"
 requires-python = ">=3.12"
+classifiers = ["License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)"]
 # aab-plugin-runtime is the gateway's package (pelegw/agent-authority-broker,
 # plugin-runtime/); it is not on PyPI. It is named here by version, not by
 # URL, on purpose: pip always re-resolves a direct-URL dependency, even when a
