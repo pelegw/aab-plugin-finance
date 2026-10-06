@@ -73,9 +73,11 @@ def is_foreign(original_currency: str) -> bool:
 def cv_from_sums(n: int, total: int, squares: int) -> float:
     """cv() over n positive integers, from their sum and their sum of squares.
 
-    The variance numerator (n*Σx² - (Σx)²) uses exact integer arithmetic, so
-    identical amounts give exactly 0, not a float residue. The subscription
-    test is `cv <= 0.15`, and it must not wobble at the edge."""
+    The caller sums the squares as REAL (aggregates.py), so the variance
+    numerator (n*Σx² - (Σx)²) is float arithmetic. It is exact for amounts
+    below about 950,000 ILS. Above that, identical amounts give a tiny
+    residue, far below the subscription test `cv <= 0.15`, which must not
+    wobble at the edge."""
     if n < 2 or total == 0:
         return 0.0
     numerator = max(0, n * squares - total * total)
