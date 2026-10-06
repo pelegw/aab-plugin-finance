@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# The plugin runtime is not on PyPI: it lives in the gateway repository
+# (pelegw/agent-authority-broker, private), so CI checks the gateway out at
+# the runtime tag with the GATEWAY_TOKEN secret (a classic PAT with `repo`
+# and `read:packages`; see README "CI"). Set the repository variable
+# GATEWAY_REF to test against another gateway ref before the tag exists.
+#
+# GitHub does not allow `secrets` in an `if:`, so each job's first step reads
+# the secret through `env` and publishes `present` as a step output. Without
+# the secret the job still passes (so the repository's first push is not
+# red), but it says plainly that nothing was tested: a warning annotation and
+# a line in the job summary. CI is green for real only once the secret exists.
+env:
+  GATEWAY_REF: ${{ vars.GATEWAY_REF || 'v0.3.0' }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is GATEWAY_TOKEN set?
+        id: gate
+        env:
+          TOKEN: ${{ secrets.GATEWAY_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GATEWAY_TOKEN is not set: the tests did NOT run (README, CI)."
+            echo "Tests did NOT run: the GATEWAY_TOKEN secret is not set." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Check out the gateway (runtime and broker)
+        if: steps.gate.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: pelegw/agent-authority-broker
+          ref: ${{ env.GATEWAY_REF }}
+          token: ${{ secrets.GATEWAY_TOKEN }}
+          path: gateway
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+      # The runtime from the gateway checkout, then the plugin; the broker
+      # only for the tests that use it (manifest check, integration suite).
+      - name: Install
+        if: steps.gate.outputs.present == 'true'
+        run: |
+          pip install -e gateway/plugin-runtime -e ".[dev]"
+          pip install -e gateway/broker
+      - name: Unit tests
+        if: steps.gate.outputs.present == 'true'
+        env:
+          AAB_SRC: ${{ github.workspace }}/gateway
+        run: python -m pytest --ignore=tests/integration
+      - name: Integration tests (the plugin registered in the gateway's broker)
+        if: steps.gate.outputs.present == 'true'
+        env:
+          AAB_SRC: ${{ github.workspace }}/gateway
+          AAB_REQUIRE_GATEWAY: "1"
+        run: python -m pytest tests/integration
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is GATEWAY_TOKEN set?
+        id: gate
+        env:
+          TOKEN: ${{ secrets.GATEWAY_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GATEWAY_TOKEN is not set: the image was NOT built (README, CI)."
+            echo "Image NOT built: the GATEWAY_TOKEN secret is not set." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # The base image is a private GHCR package of the gateway repository.
+      - name: Log in to ghcr.io
+        if: steps.gate.outputs.present == 'true'
+        env:
+          TOKEN: ${{ secrets.GATEWAY_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+      - name: docker build (no push)
+        if: steps.gate.outputs.present == 'true'
+        run: docker build -t aab-plugin-finance:ci .
