@@ -128,3 +128,14 @@ def test_report_validation(perform, params):
     rid = request(perform)["refresh_id"]
     body = {"refresh_id": rid, "status": "running", **params}
     assert perform("report_refresh", body).status_code == 400
+
+
+def test_company_visibility_is_applied_before_the_limit(perform, fake_now):
+    # The visible request must not be pushed off a short page by newer denied
+    # ones: the filter runs inside the SQL, before the LIMIT.
+    request(perform, company="all")
+    for _ in range(3):
+        fake_now.advance(60)
+        request(perform, company="max")
+    seen = items(perform("list_refresh_requests", {"limit": 1}, scope(company_deny=["max"])))
+    assert [r["company"] for r in seen] == ["all"]

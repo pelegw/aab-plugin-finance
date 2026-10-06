@@ -290,3 +290,15 @@ def test_numbers_match_analysis_js(fixture, tmp_path):
         js["remaining"], js["commitment"])
     assert [[f["currency"], x100(f["charged_total"])]
             for f in items(fixture("foreign_currency"))] == js["foreign"]
+
+
+def test_large_amounts_do_not_overflow_the_merchant_aggregates(perform):
+    # Two 22 million ILS purchases at one merchant: as integers their squares
+    # pass 2^63, SQLite's SUM raises, and every key would get a 503 from the
+    # three merchant aggregates until the rows changed. The squares are REAL.
+    big = [txn("2026-08-01", -22_000_000, "YACHT"), txn("2026-09-01", -22_000_000, "YACHT")]
+    ingest(perform, "cal", "1111", big)
+    for action in ("top_merchants", "recurring_merchants", "subscriptions"):
+        assert perform(action).status_code == 200, action
+    [m] = [m for m in items(perform("top_merchants")) if m["merchant"] == "YACHT"]
+    assert m["count"] == 2

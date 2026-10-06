@@ -31,6 +31,7 @@ from .annotations import request_id
 from .clock import Clock
 from .ingest import RUN_ID_RE
 from .scope import Visibility
+from .store import visibility_clause
 
 log = logging.getLogger(__name__)
 
@@ -78,15 +79,18 @@ def list_requests(store, status: str, refresh_id: str | None, limit: int, clock:
         if refresh_id:
             sql += " AND id = ?"
             args.append(refresh_id)
+        # A request for one company answers to that company's visibility;
+        # "all" names no company and stays visible. Inside the SQL, before
+        # the LIMIT, so denied requests can never push a visible one off a
+        # short page (every other read filters the same way).
+        sql += (" AND (company = 'all' OR (1=1"
+                + visibility_clause("company", company_vis, args) + "))")
         sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
         args.append(limit)
         found = conn.execute(sql, args).fetchall()
     if expired:
         log.info("refresh requests expired %s", kv(count=expired))
-    # A request for one company answers to that company's visibility; "all"
-    # names no company and stays visible.
-    return [rows.refresh_request(r) for r in found
-            if r["company"] == "all" or company_vis.admits(r["company"])]
+    return [rows.refresh_request(r) for r in found]
 
 
 def pending_count(conn) -> int:

@@ -7,7 +7,9 @@ Validation the manifest's schema cannot express, all 400 before any write:
 at most 500 rows per chunk; `run_id` is [A-Za-z0-9._-]; `source.id`
 normalizes to <company>:<digits> under the run's own company; every row
 `date` is a real YYYY-MM-DD inside [range.start, range.end]; amounts fit
-comfortably in SQLite's integers (so a SUM can never overflow into a 503).
+comfortably in SQLite's integers, so a SUM of amounts can never overflow
+into a 503 (sums of squares, which overflow far earlier, are computed as
+REAL in aggregates.py).
 
 Idempotency: each chunk is stored with sha256(canonical payload). The same
 chunk again answers `duplicate`; the same index with other content is a

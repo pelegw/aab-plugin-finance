@@ -170,7 +170,12 @@ def merchants(conn, view: View, filters: Filters) -> list[dict]:
            " group_concat(DISTINCT source_id) AS sources,"
            " SUM(CASE WHEN charged_x100 < 0 THEN 1 ELSE 0 END) AS purchases,"
            " SUM(CASE WHEN charged_x100 < 0 THEN -charged_x100 ELSE 0 END) AS purchase_sum,"
-           " SUM(CASE WHEN charged_x100 < 0 THEN charged_x100 * charged_x100 ELSE 0 END)"
+           # The squares feed only a ratio (the coefficient of variation), so
+           # they are summed as REAL: an integer SUM of squares passes 2^63,
+           # which SQLite refuses (a 503 for every key), with amounts far
+           # below the ingest bound, e.g. two purchases of 22 million ILS.
+           " SUM(CASE WHEN charged_x100 < 0"
+           " THEN CAST(charged_x100 AS REAL) * charged_x100 ELSE 0 END)"
            " AS purchase_squares,"
            " MAX(date) AS last_date, MAX(is_transfer) AS transfer,"
            " MAX(CASE WHEN installment_total > 1 THEN 1 ELSE 0 END) AS installments"
