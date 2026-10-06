@@ -1,0 +1,15 @@
+# The plugin package descriptor (schema 1), read by the gateway's installer.
+# The installer renders this service's compose overlay from these fields
+# through a fixed template (own network net_finance shared with the broker
+# only, no ports, no bind mounts, PLUGIN_TOKEN / PLUGIN_SECRETS_KEY /
+# PLUGIN_SECRETS_DIR, a finance_secrets volume at /secrets). The schema is
+# strict: no other keys are allowed here.
+schema: 1
+service: finance
+plugins: [finance]
+manifests: [aab_plugin_finance/manifest.yaml]
+runtime: "0.3"
+build: {dockerfile: Dockerfile}
+volumes: {finance_data: /data}
+environment: {FINANCE_DB: /data/finance.db}
+env_passthrough: [TZ]

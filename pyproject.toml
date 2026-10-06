@@ -1,0 +1,44 @@
+[project]
+name = "aab-plugin-finance"
+dynamic = ["version"]   # single source: VERSION at the repo root
+description = "Finance plugin service for the Agent Authority Broker (card and bank transactions)"
+requires-python = ">=3.12"
+# aab-plugin-runtime is the gateway's package (pelegw/agent-authority-broker,
+# plugin-runtime/); it is not on PyPI. It is named here by version, not by
+# URL, on purpose: pip always re-resolves a direct-URL dependency, even when a
+# runtime is already installed, so a URL here would make the Docker build
+# (FROM the base image, which already has the runtime) try to git-clone a
+# private repo, and would conflict with an editable gateway checkout in
+# development. Where the runtime comes from:
+#   * the container: the base image ghcr.io/pelegw/aab-plugin-base:<version>;
+#   * development and CI: pip install -e "$AAB_SRC/plugin-runtime" -e ".[dev]";
+#   * a standalone install: the `runtime` extra below (the gateway tag).
+dependencies = [
+    "aab-plugin-runtime>=0.2.0,<1",
+    "pyyaml>=6,<7",            # the manifest ships as YAML
+    "uvicorn>=0.30,<1",        # serves the plugin API in the container
+    "tzdata>=2024.1",          # IANA zones for zoneinfo where the OS has none (Windows, slim images)
+]
+
+[project.optional-dependencies]
+runtime = [
+    "aab-plugin-runtime @ git+https://github.com/pelegw/agent-authority-broker@v0.3.0#subdirectory=plugin-runtime",
+]
+dev = ["pytest>=8", "httpx>=0.27,<1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "^(?P<version>\\d+\\.\\d+\\.\\d+)\\s*$"
+
+[tool.hatch.metadata]
+allow-direct-references = true      # the `runtime` extra is a git URL
+
+[tool.hatch.build.targets.wheel]
+packages = ["aab_plugin_finance"]   # includes manifest.yaml (package data)
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

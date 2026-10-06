@@ -1,0 +1,8 @@
+# The build context is the repo root; the image needs only VERSION,
+# pyproject.toml and the package. Keep everything else (and any local data)
+# out of the context.
+*
+!VERSION
+!pyproject.toml
+!aab_plugin_finance/
+aab_plugin_finance/**/__pycache__

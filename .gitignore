@@ -1,0 +1,22 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Data: the finance database and anything a local run produces. Financial
+# data never belongs in git.
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

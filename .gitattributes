@@ -1,0 +1,4 @@
+# LF everywhere, on every platform: the installer clones and builds this
+# repository on Linux, and the manifest and descriptor must read the same in
+# a Windows checkout as on the server.
+* text=auto eol=lf

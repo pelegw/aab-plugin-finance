@@ -1,0 +1,63 @@
+"""Build the plugin-finance app from the container's environment.
+
+The container receives only its own values (the installer renders them from
+aab-plugin.yaml); the names are generic so the image does not care which
+.env variable fed them:
+
+  PLUGIN_TOKEN        the broker's X-Plugin-Token for this service (required)
+  PLUGIN_SECRETS_KEY  Fernet key for this service's secret store (holds
+                      nothing: config_schema is empty and no credential exists)
+  PLUGIN_SECRETS_DIR  where that store lives (the /secrets volume)
+  FINANCE_DB          the database, in this service's own finance_data volume
+  TZ / FINANCE_TZ     the owner's time zone for calendar dates (default
+                      Asia/Jerusalem; FINANCE_TZ wins when both are set)
+
+The first three are read by `aab_plugin_runtime.from_env`; an empty
+PLUGIN_TOKEN refuses to boot (an open plugin API must fail loudly).
+
+The schema is created at boot. If the volume is not writable yet the
+service still starts, reports 503 health, and creates the schema on the
+first request that can open the file.
+
+Served as a factory (`uvicorn --factory aab_plugin_finance.main:create_app`)
+so importing this module reads no environment.
+"""
+
+import logging
+import os
+import sqlite3
+from collections.abc import Mapping
+
+from aab_plugin_runtime import from_env, logging_setup
+from aab_plugin_runtime.logging_setup import kv
+from fastapi import FastAPI
+
+from .adapter import FinanceAdapter
+from .clock import Clock
+from .store import Store
+
+log = logging.getLogger(__name__)
+
+DEFAULT_DB = "/data/finance.db"
+SERVICE = "finance"
+
+
+def build_adapter(environ: Mapping[str, str]) -> FinanceAdapter:
+    store = Store(environ.get("FINANCE_DB") or DEFAULT_DB)
+    try:
+        store.ensure()
+    except (sqlite3.Error, OSError) as exc:
+        log.warning("finance store not ready at boot; will retry on use %s",
+                    kv(error=type(exc).__name__))
+    else:
+        log.info("finance store ready %s", kv(db=store.path))
+    return FinanceAdapter(store, Clock(environ.get("FINANCE_TZ") or environ.get("TZ")))
+
+
+def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
+    env = os.environ if environ is None else environ
+    # serve() configures logging too, but only after the adapter (and so the
+    # store's boot lines) exists; doing it first puts those lines in the
+    # service's format. A second configure() is a no-op.
+    logging_setup.configure(f"plugin-{SERVICE}", dict(env))
+    return from_env([build_adapter(env)], dict(env), service=SERVICE)
