@@ -1,5 +1,5 @@
 """CallScope parsing fails closed: malformed means 400, `[]` means nothing,
-absent constraints are the top, unknown constraints are refused."""
+absent constraints are the top, and the parser rejects unknown constraints."""
 
 import pytest
 import yaml

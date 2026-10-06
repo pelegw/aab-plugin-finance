@@ -1,12 +1,12 @@
 """Typed, fail-closed readers for action params.
 
-The broker validates params against the manifest before they arrive, but
-the adapter does not rely on it: the plugin API is reachable by anything
-holding the plugin token, and tests call it directly. Every reader checks
-type and bounds itself (bool is not an int; a string must be valid UTF-8
-text) and answers 400 with the param's NAME, never its value.
+The broker validates params against the manifest before they arrive, but the
+adapter does not rely on that. Anything that holds the plugin token can reach
+the plugin API, and tests call it directly. Every reader checks type and
+bounds itself: bool is not an int, and a string must be valid UTF-8 text. A
+failure gets a 400 with the param's NAME, never its value.
 
-Absent and null are the same: the broker drops top-level nulls but keeps
+Absent and null are the same. The broker drops top-level nulls but keeps
 nested ones (`source.balance_x100: null`), and both mean "not given".
 """
 
@@ -30,7 +30,7 @@ def text(params: dict, name: str, *, required: bool = False, default: str | None
     if not isinstance(value, str):
         raise AdapterError(400, f"{name} must be a string")
     try:
-        # JSON can carry lone surrogates; SQLite would fail on them mid-write.
+        # JSON can carry lone surrogates. SQLite would fail on them mid-write.
         value.encode("utf-8")
     except UnicodeEncodeError:
         raise AdapterError(400, f"{name} is not valid text") from None
@@ -75,8 +75,8 @@ def choice(params: dict, name: str, values: tuple[str, ...], *, default: str) ->
 
 
 def limit(params: dict, *, default: int, maximum: int) -> int:
-    """Clamped into [1, maximum]: SQLite reads LIMIT -1 as "no limit", so a
-    negative value must never reach a query."""
+    """Clamp the value into [1, maximum]. SQLite reads LIMIT -1 as "no limit",
+    so a negative value must never reach a query."""
     value = integer(params, "limit")
     return max(1, min(default if value is None else value, maximum))
 

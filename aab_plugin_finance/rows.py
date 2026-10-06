@@ -1,15 +1,17 @@
-"""Result shaping: database rows to the JSON agents receive.
+"""Result shaping: database rows to the JSON that agents receive.
 
-Amounts are stored in integer hundredths and presented as numbers in units
-(`charged_x100 = -12345` -> `charged_amount: -123.45`). Every row that names
-a card or account carries `resource_ref: {kind, id}` so the broker's own
-post-filter can drop it if this plugin ever let a hidden one through.
+The database keeps amounts in integer hundredths. Results show them as numbers
+in units (`charged_x100 = -12345` -> `charged_amount: -123.45`). Every row that
+names a card or an account carries `resource_ref: {kind, id}`. The broker's
+own post-filter can then drop the row if this plugin ever lets a hidden one
+through.
 
-Redactions the grant may ask for, applied here and only here:
+The grant can ask for these redactions. This module applies them, and no other
+module does:
   * `merchant_names: false`: the description becomes an opaque merchant id
-    (`merchant:` + 10 hex of sha256(merchant_key)), stable per merchant so
-    totals still group; the memo is emptied; categories stay;
-  * `notes: false`: the `note` field is absent, not null, so not even the
+    (`merchant:` + 10 hex of sha256(merchant_key)). The id is stable per
+    merchant, so totals still group. The memo becomes empty. Categories stay.
+  * `notes: false`: the `note` field is absent, not null. Thus not even the
     presence of a note shows.
 """
 
@@ -83,7 +85,7 @@ def source(row: Mapping[str, Any], label: str) -> dict:
 
 
 def run(row: Mapping[str, Any]) -> dict:
-    """Upload-run metadata: no transaction content exists in it."""
+    """Run metadata. It contains no transaction content."""
     return {
         "run_id": row["run_id"], "company": row["company"],
         "source": source_ref(row["source_kind"], row["source_id"]),

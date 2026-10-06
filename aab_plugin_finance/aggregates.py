@@ -1,30 +1,39 @@
 """Aggregates: a port of cred-analysis `src/analysis.js`.
 
-Each function is a GROUP BY over `store.visible_tx` (the same visibility-
-filtered subquery line items use), so a hidden card, a hidden transaction or
-a row outside the date window can never move a total. SQL does the grouping
-and the integer sums; Python finishes what analysis.js computes per group
-(coefficient of variation, implied rates, change against the previous
-month, the year's empty months) and turns hundredths into units at the end.
+Each function is a GROUP BY over `store.visible_tx`. Line items use the same
+visibility-filtered subquery. A hidden card, a hidden transaction or a row
+outside the date window can therefore never move a total. SQL does the
+grouping and the integer sums. Python then calculates what analysis.js
+calculates per group:
+  * The coefficient of variation.
+  * The implied rates.
+  * The change against the previous month.
+  * The empty months of the year.
+At the end, Python turns hundredths into units.
 
-The heuristics are analysis.js's, verbatim (sign convention: a negative
-charged amount is a purchase; "net" is purchases minus refunds, positive):
-  spend      -charged when charged < 0;   refunds   charged when charged > 0
-  months     a year view lists Jan..the current month even without data
-  change     (net - previous net) / previous net, null when previous is 0
-  top        merchants with net > 0, by net
-  recurring  3+ distinct months and net > 0
-  subscriptions  4+ months, net > 0, not a transfer, no installments,
-             purchases <= months + 1, cv(purchase amounts) <= 0.15; active
-             when last charged on or after the first day of last month
-             (analysis.js compares "YYYY-MM-DD" >= "YYYY-MM", same here)
-  installments   plans grouped by card, merchant, plan length and deal
-             amount; paid = highest installment number seen (else the
-             charges counted); remaining = total - paid
-  foreign    original currency outside {'', ILS, NIS, ₪}; implied rate =
-             charged / original
-Groups that analysis.js keys by workbook sheet ("Cal 1234") are keyed by
-source id ("cal:1234") here: the same card, its canonical id.
+The heuristics are those of analysis.js, verbatim. The sign convention is the
+same: a negative charged amount is a purchase. "Net" is purchases minus
+refunds, as a positive number.
+  * spend: -charged when charged < 0.
+  * refunds: charged when charged > 0.
+  * months: a year view lists Jan..the current month, even without data.
+  * change: (net - previous net) / previous net. It is null when the
+    previous net is 0.
+  * top: merchants with net > 0, by net.
+  * recurring: 3+ distinct months and net > 0.
+  * subscriptions: 4+ months, net > 0, not a transfer, no installments,
+    purchases <= months + 1, and cv(purchase amounts) <= 0.15. A
+    subscription is active when its last charge is on or after the first
+    day of last month. analysis.js compares "YYYY-MM-DD" >= "YYYY-MM", and
+    so does this code.
+  * installments: plans grouped by card, merchant, plan length and deal
+    amount. paid = the highest installment number seen, or else the count
+    of charges. remaining = total - paid.
+  * foreign: an original currency outside {'', ILS, NIS, ₪}. implied rate =
+    charged / original.
+
+analysis.js keys some groups by workbook sheet ("Cal 1234"). This code keys
+them by source id ("cal:1234"): the same card, by its canonical id.
 """
 
 from dataclasses import replace
@@ -160,8 +169,8 @@ def by_category(conn, view: View, filters: Filters) -> dict:
 # ---- merchants -----------------------------------------------------------------------
 
 def merchants(conn, view: View, filters: Filters) -> list[dict]:
-    """One row per merchant_key (rows with an empty description are not a
-    merchant, as in analysis.js)."""
+    """One row per merchant_key. As in analysis.js, a row with an empty
+    description is not a merchant."""
     params: list = []
     sql = (f"WITH v AS ({visible_tx(view, filters, params)})"
            " SELECT merchant_key, MIN(description) AS name, COUNT(*) AS count,"
@@ -171,9 +180,10 @@ def merchants(conn, view: View, filters: Filters) -> list[dict]:
            " SUM(CASE WHEN charged_x100 < 0 THEN 1 ELSE 0 END) AS purchases,"
            " SUM(CASE WHEN charged_x100 < 0 THEN -charged_x100 ELSE 0 END) AS purchase_sum,"
            # The squares feed only a ratio (the coefficient of variation), so
-           # they are summed as REAL: an integer SUM of squares passes 2^63,
-           # which SQLite refuses (a 503 for every key), with amounts far
-           # below the ingest bound, e.g. two purchases of 22 million ILS.
+           # the SQL sums them as REAL. An integer SUM of squares can pass
+           # 2^63. SQLite then raises an overflow error, and every key gets a
+           # 503. Amounts far below the ingest bound do this, for example two
+           # purchases of 22 million ILS.
            " SUM(CASE WHEN charged_x100 < 0"
            " THEN CAST(charged_x100 AS REAL) * charged_x100 ELSE 0 END)"
            " AS purchase_squares,"

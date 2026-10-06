@@ -1,9 +1,9 @@
 """The packaged manifest: the properties the broker and this adapter rely on.
 
 The broker validates the manifest with its own loader when the owner pins
-it; `test_the_gateway_loader_accepts_the_manifest` runs that loader here (from
-the gateway checkout, test-only) so a manifest the broker would refuse never
-ships.
+it. `test_the_gateway_loader_accepts_the_manifest` runs that loader here,
+from the gateway checkout (test-only). A manifest that the broker would
+reject thus never ships.
 """
 
 import re

@@ -1,20 +1,22 @@
 """Refresh requests: an agent asks, the owner approves, the scraper runs it.
 
-`request_refresh` is `modes: [draft]` in the manifest, so the broker turns
-every call into an approval card and only delivers it here after the owner
-approved it; this module then records it as `approved`. The scraper polls
-`list_refresh_requests`, claims one with `report_refresh running` and ends
-it with `completed` or `failed`.
+The manifest has `modes: [draft]` for `request_refresh`. The broker therefore
+turns every call into an approval card. It delivers the call here only after
+the owner approves it. This module then records the refresh request as
+`approved`. After that, the scraper does these steps:
+  1. It polls `list_refresh_requests`.
+  2. It claims one refresh request with `report_refresh running`.
+  3. It ends that refresh request with `completed` or `failed`.
 
   approved --claim--> running --> completed | failed
   approved --7 days--> expired          (lazily, on the next list or report)
 
-The claim is one `UPDATE ... WHERE status = 'approved'`: two pollers racing
-for the same request cannot both win; the loser gets a 409. Finishing
-requires `running`. An unknown id is a 404.
+The claim is one `UPDATE ... WHERE status = 'approved'`. When two pollers race
+for the same refresh request, they cannot both win. The loser gets a 409. To
+finish, the refresh request must be `running`. An unknown id is a 404.
 
-Logs carry refresh ids and statuses only; never the reason (agent text) or
-the scraper's message.
+Logs carry only refresh ids and statuses. They never carry the reason (agent
+text) or the scraper's message.
 """
 
 import json
@@ -79,10 +81,11 @@ def list_requests(store, status: str, refresh_id: str | None, limit: int, clock:
         if refresh_id:
             sql += " AND id = ?"
             args.append(refresh_id)
-        # A request for one company answers to that company's visibility;
-        # "all" names no company and stays visible. Inside the SQL, before
-        # the LIMIT, so denied requests can never push a visible one off a
-        # short page (every other read filters the same way).
+        # A refresh request for one company answers to that company's
+        # visibility. "all" names no company and stays visible. The filter
+        # runs inside the SQL, before the LIMIT, so denied refresh requests
+        # can never push a visible one off a short page. Every other read
+        # filters the same way.
         sql += (" AND (company = 'all' OR (1=1"
                 + visibility_clause("company", company_vis, args) + "))")
         sql += " ORDER BY created_at DESC, id DESC LIMIT ?"

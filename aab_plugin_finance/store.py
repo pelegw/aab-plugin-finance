@@ -1,26 +1,29 @@
 """The finance database: connections, error mapping, and the visibility SQL.
 
-One SQLite file in the plugin's own volume (FINANCE_DB), opened per request
-(busy_timeout=5000, journal_mode=WAL, foreign_keys=ON). The container runs
-one uvicorn worker, so there is one writer process; requests are threads of
-it, and every write is one `BEGIN IMMEDIATE` transaction.
+The database is one SQLite file in the plugin's own volume (FINANCE_DB). The
+store opens it per request (busy_timeout=5000, journal_mode=WAL,
+foreign_keys=ON). The container runs one uvicorn worker, so there is one
+writer process. Requests are threads of that process, and every write is one
+`BEGIN IMMEDIATE` database transaction.
 
-Visibility is applied INSIDE every query, never by filtering fetched rows:
-post-filtering would corrupt LIMIT and keyset paging and, for aggregates,
-let a hidden card move a total. `tx_clause` is the one fragment every read
-uses. It admits a transaction only when
-  * its card or account is admitted by that kind's visibility (deny, and
-    allow_only when the capability lists cards or accounts; `[]` = none),
-  * the transaction itself is not denied (owner-hidden transactions),
-  * its company is not denied,
-  * and, under `date_window_days`, it is dated on or after the cutoff.
-Column names in the fragments are trusted literals from this package; every
-value is a bound parameter (the pattern of the gateway's WhatsApp archive,
-`_visibility_clause`).
+The store applies visibility INSIDE every query, never as a filter on fetched
+rows. A post-filter would corrupt LIMIT and keyset paging. For aggregates, it
+would also let a hidden card move a total. `tx_clause` is the one fragment
+that every read uses. It admits a transaction only when all of these are true:
+  * The visibility of its kind admits its card or account. That is the deny
+    set, and also allow_only when the capability lists cards or accounts
+    (`[]` = none).
+  * The scope does not deny the transaction itself (owner-hidden
+    transactions).
+  * The scope does not deny its company.
+  * Under `date_window_days`, its date is on or after the cutoff.
+Every column name in the fragments is a literal from this package, so the SQL
+can trust it. Every value is a bound parameter. This is the pattern of the
+gateway's WhatsApp archive (`_visibility_clause`).
 
-Errors: any `sqlite3.Error` becomes AdapterError(503) ("not performed, safe
-to retry"). A write that fails anywhere before COMMIT is rolled back and is
-also a 503, whatever the exception, because nothing was performed.
+Errors: any `sqlite3.Error` becomes AdapterError(503), which means "not done,
+safe to retry". A write that fails anywhere before COMMIT rolls back. It is
+also a 503, whatever the exception, because nothing changed.
 """
 
 import logging
@@ -48,7 +51,8 @@ class Store:
     def __init__(self, path: str):
         if not isinstance(path, str) or not path.strip():
             raise ValueError("FINANCE_DB must be a non-empty path")
-        # A URI-looking path could smuggle connection parameters; refuse at boot.
+        # A path that looks like a URI can smuggle connection parameters.
+        # Reject it at boot.
         if path.startswith("file:") or "?" in path or "#" in path:
             raise ValueError("FINANCE_DB must be a plain file path")
         self.path = path
@@ -61,7 +65,7 @@ class Store:
     # ---- connections -----------------------------------------------------------
 
     def _open(self) -> sqlite3.Connection:
-        # isolation_level=None: no implicit transactions; writes say BEGIN
+        # isolation_level=None: no implicit transactions. Writes say BEGIN
         # IMMEDIATE themselves, so the transaction boundary is explicit.
         conn = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
         try:
@@ -107,9 +111,9 @@ class Store:
 
     @contextmanager
     def write(self) -> Iterator[sqlite3.Connection]:
-        """One BEGIN IMMEDIATE transaction. An AdapterError raised inside
-        (a 400, 404 or 409 decided mid-transaction) rolls back and passes
-        through; anything else rolls back and is a 503."""
+        """One BEGIN IMMEDIATE database transaction. An AdapterError raised
+        inside it (a 400, 404 or 409 decided mid-transaction) rolls back and
+        passes through. Anything else rolls back and becomes a 503."""
         try:
             conn = self._open()
         except sqlite3.Error as exc:
@@ -124,7 +128,7 @@ class Store:
             raise
         except Exception as exc:
             _rollback(conn)
-            # The exception type only: a message could quote row content.
+            # Log the exception type only. A message can quote row content.
             log.warning("finance write rolled back %s", kv(error=type(exc).__name__))
             raise AdapterError(503, UNAVAILABLE) from exc
         finally:
@@ -139,7 +143,7 @@ class Store:
 
     def names(self, kind: str, ids: list[str]) -> dict[str, str]:
         """Display names for /label (approval cards, the console). Never
-        amounts or merchants: a transaction is named by date and card."""
+        amounts or merchants: the name of a transaction is its date and card."""
         wanted = [i for i in dict.fromkeys(ids) if isinstance(i, str)][:500]
         if not wanted:
             return {}
@@ -174,7 +178,7 @@ def _rollback(conn: sqlite3.Connection) -> None:
         try:
             conn.execute("ROLLBACK")
         except sqlite3.Error:
-            pass                      # the connection is closed next anyway
+            pass                      # the next step closes the connection anyway
 
 
 def escape_like(text: str) -> str:
@@ -185,8 +189,8 @@ def escape_like(text: str) -> str:
 # ---- visibility fragments ----------------------------------------------------------
 
 def visibility_clause(column: str, vis: Visibility, params: list) -> str:
-    """' AND ...' for one kind on `column`: deny wins, `allow` None is
-    unrestricted, an empty allow set admits nothing (AND 0)."""
+    """' AND ...' for one kind on `column`. Deny wins. `allow` None means
+    unrestricted. An empty `allow` set admits nothing (AND 0)."""
     clause = ""
     if vis.deny:
         ids = sorted(vis.deny)
@@ -204,8 +208,9 @@ def visibility_clause(column: str, vis: Visibility, params: list) -> str:
 
 def source_clause(view: View, params: list, kind_col: str, id_col: str,
                   company_col: str) -> str:
-    """A card answers to the card visibility, an account to the account
-    one; a row of any other kind matches neither arm and is invisible."""
+    """A card answers to the card visibility, and an account to the account
+    visibility. A row of any other kind matches neither arm and stays
+    invisible."""
     sql = f" AND (({kind_col} = 'card'"
     sql += visibility_clause(id_col, view.card, params)
     sql += f") OR ({kind_col} = 'account'"
@@ -270,8 +275,9 @@ def filters_clause(f: Filters, params: list, alias: str = "t") -> str:
 
 
 def visible_tx(view: View, filters: Filters, params: list) -> str:
-    """SELECT of every visible transaction matching `filters`: the subquery
-    each aggregate groups over, so they all see exactly the same rows."""
+    """SELECT of every visible transaction that matches `filters`. Each
+    aggregate groups over this subquery, so all aggregates see exactly the
+    same rows."""
     return ("SELECT t.* FROM transactions t WHERE 1=1"
             + tx_clause(view, params) + filters_clause(filters, params))
 
@@ -301,8 +307,8 @@ def transactions_page(conn: sqlite3.Connection, view: View, filters: Filters, *,
 
 def search_page(conn: sqlite3.Connection, view: View, filters: Filters, query: str, *,
                 notes: bool, names: bool, limit: int) -> list[sqlite3.Row]:
-    """LIKE search. Fields an agent may not read are not searched either: a
-    match would tell it what a redacted description says."""
+    """LIKE search. The search skips the fields that the agent cannot read. A
+    match would tell the agent what a redacted description says."""
     params: list = []
     sql = _select(notes) + " WHERE 1=1" + tx_clause(view, params) + filters_clause(filters, params)
     like = "%" + escape_like(query) + "%"
@@ -344,7 +350,7 @@ def get_source(conn: sqlite3.Connection, source_id: str) -> sqlite3.Row | None:
 def visible_sources(conn: sqlite3.Connection, view: View,
                     kind: str | None = None) -> list[sqlite3.Row]:
     """Each visible source with its visible transactions' count and span.
-    Hidden transactions are left out of the counts (the JOIN condition)."""
+    The counts leave out hidden transactions (the JOIN condition)."""
     params: list = []
     join = visibility_clause("t.id", view.transaction, params)
     sql = ("SELECT s.*, COUNT(t.id) AS tx_count, MIN(t.date) AS first_date,"

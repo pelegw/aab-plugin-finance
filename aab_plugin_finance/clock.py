@@ -1,12 +1,17 @@
 """The plugin's notion of "now" and "today", in one injectable object.
 
-Dates in the data are the owner's local calendar dates (cred-analysis turns
-the scraper's timestamps into local YYYY-MM-DD), so everything date-shaped
-here (the date window, "the current month", a scrape's calendar date) uses
-the deployment's time zone, from TZ (FINANCE_TZ overrides), default
-Asia/Jerusalem. Timestamps the plugin records itself (created_at,
-applied_at, expires_at) are UTC ISO-8601 strings with a Z, which sort and
-compare correctly as text.
+Dates in the data are the owner's local calendar dates. cred-analysis turns
+the scraper's timestamps into local YYYY-MM-DD. Everything date-shaped here
+therefore uses the time zone of the deployment:
+  * The date window.
+  * "The current month".
+  * The calendar date of a scrape.
+The zone comes from TZ, and FINANCE_TZ overrides it. The default is
+Asia/Jerusalem.
+
+The plugin also records its own timestamps (created_at, applied_at,
+expires_at). These are UTC ISO-8601 strings with a Z, which sort and compare
+correctly as text.
 
 Tests pass a fake `now` to step over the 24-hour abandon window and the
 7-day refresh expiry without sleeping.
@@ -26,8 +31,8 @@ DEFAULT_TZ = "Asia/Jerusalem"
 
 
 def zone(name: str | None) -> ZoneInfo:
-    """The named zone, or the default when the name is empty or unknown (a
-    wrong TZ only shifts day boundaries; it must not stop the plugin)."""
+    """The named zone, or the default when the name is empty or unknown. A
+    wrong TZ only shifts day boundaries, and it must not stop the plugin."""
     if name:
         try:
             return ZoneInfo(name)
@@ -59,17 +64,18 @@ class Clock:
         return self.today().strftime("%Y-%m")
 
     def days_ago(self, days: int) -> str:
-        """The cutoff date `days` before today. A window reaching past the
-        calendar's start (date_window_days has no maximum) is all history,
-        not an overflow."""
+        """The cutoff date `days` before today. date_window_days has no
+        maximum. A window that reaches past the start of the calendar means
+        all history, not an overflow."""
         try:
             return (self.today() - timedelta(days=days)).isoformat()
         except OverflowError:
             return date.min.isoformat()
 
     def local_date(self, iso: str) -> str:
-        """The local calendar date of an ISO timestamp (a scrape's
-        `scraped_at`); today when it is empty or unreadable."""
+        """The local calendar date of an ISO timestamp, such as a scrape's
+        `scraped_at`. It returns today when the timestamp is empty or
+        unreadable."""
         if iso:
             try:
                 parsed = datetime.fromisoformat(iso.replace("Z", "+00:00"))

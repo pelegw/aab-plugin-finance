@@ -1,15 +1,15 @@
 """Canonical ids for the finance plugin's resource kinds.
 
-The broker compares ids as plain strings (hidden resources, key denies,
-capability selectors), so every id the owner or an agent types goes through
-one of these normalizers first: two spellings of one card must never be two
-ids, or hiding "Cal 1234" would leave "cal:1234" visible. Anything that does
-not normalize is a 400. Error messages say what was expected and never echo
-the value, which is caller input.
-
-  card / account   "<company>:<digits>"   "Cal 1234", "CAL-1234" -> "cal:1234"
-  company          "[a-z][a-z0-9]{1,31}"  "Cal" -> "cal"
-  transaction      "tx_" + 16 hex          derived from the scraper's row key
+The broker compares ids as plain strings: hidden resources, key denies and
+capability selectors. Every id that the owner or an agent types therefore goes
+through one of these normalizers first. Two spellings of one card must never
+become two ids. Otherwise, if the owner hid "Cal 1234", "cal:1234" would stay
+visible. Anything that does not normalize is a 400. Error messages say what
+the normalizer expected. They never echo the value, which is caller input.
+  * card / account: "<company>:<digits>". "Cal 1234" and "CAL-1234" become
+    "cal:1234".
+  * company: "[a-z][a-z0-9]{1,31}". "Cal" becomes "cal".
+  * transaction: "tx_" + 16 hex, made from the scraper's row key.
 """
 
 import hashlib
@@ -19,12 +19,13 @@ from aab_plugin_runtime import AdapterError
 
 COMPANY_RE = re.compile(r"[a-z][a-z0-9]{1,31}")
 # A company, one separator (":", "-", "_" or spaces) and 1..8 digits. The
-# separator is required: "cal1234" is ambiguous (company "cal1"?) and refused.
+# separator is mandatory: "cal1234" is ambiguous (company "cal1"?), so the
+# normalizer rejects it.
 _SOURCE_RE = re.compile(r"\s*([A-Za-z][A-Za-z0-9]*)\s*[:_\s-]\s*([0-9]{1,8})\s*")
 TX_ID_RE = re.compile(r"tx_[0-9a-f]{16}")
 
-# Display names for the companies cred-analysis scrapes; anything else (a
-# bank id) is shown as its id.
+# Display names for the companies that cred-analysis scrapes. Any other
+# company (a bank id) shows as its id.
 COMPANY_LABELS = {"cal": "Cal", "max": "Max", "isracard": "Isracard", "amex": "Amex"}
 
 
@@ -58,8 +59,9 @@ def normalize_tx_id(value: object) -> str:
 
 
 def tx_id(key: str) -> str:
-    """The transaction's public id: a hash of the scraper's row key, so the
-    key itself (card, amount, description) never has to leave the plugin."""
+    """The transaction's public id: a hash of the scraper's row key. The row
+    key itself (card, amount, description) then never has to leave the
+    plugin."""
     return "tx_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 

@@ -1,33 +1,36 @@
 """The finance plugin adapter: every manifest action, inside the broker's scope.
 
-Served by `aab_plugin_runtime` in the plugin-finance container; the broker
-reaches it over the plugin API. Shape copied from the gateway's WhatsApp
-adapter: a dispatch table, a manifest/handler parity check at boot (an
-action declared but not implemented, or the reverse, refuses to start), and
-store failures mapped to 503.
+`aab_plugin_runtime` serves this adapter in the plugin-finance container. The
+broker reaches it over the plugin API. The shape comes from the gateway's
+WhatsApp adapter:
+  * A dispatch table.
+  * A parity check between the manifest and the handlers at boot. If the
+    manifest declares an action that this code does not implement, or the
+    reverse, the plugin does not start.
+  * Store failures map to 503.
 
-What this module guarantees, whatever the broker already checked:
-  * The CallScope is parsed fail-closed (scope.py): a malformed scope or a
-    constraint this manifest does not declare is a 400, `allow_only: []`
-    sees nothing.
+This module makes sure of these points, whatever the broker already checked:
+  * CallScope parsing fails closed (scope.py). A malformed scope, or a
+    constraint that this manifest does not declare, is a 400.
+    `allow_only: []` sees nothing.
   * Visibility lives INSIDE every query (store.tx_clause), aggregates
-    included, for cards and accounts, owner-hidden transactions, denied
-    companies and the date window.
-  * Hidden == missing: a hidden or out-of-window transaction, card or
-    account is the same 404 as one that does not exist.
-  * `detail: aggregate` allows only snapshot_info, list_sources,
+    included. It covers cards and accounts, owner-hidden transactions,
+    denied companies and the date window.
+  * Hidden == missing. A hidden or out-of-window transaction, card or
+    account gets the same 404 as one that does not exist.
+  * `detail: aggregate` permits only snapshot_info, list_sources,
     monthly_summary, by_category, foreign_currency, list_runs and
-    list_refresh_requests; every other action it applies to is a 403.
-    `notes: false` strips notes and makes set_note and list_notes a 403;
-    `merchant_names: false` replaces descriptions with opaque merchant ids
-    and stops searches from matching them.
-  * Every row naming a card or account carries `resource_ref`, so the
-    broker's post-filter can drop anything this code let through.
-  * `ingest_snapshot` answers only to the company's visibility (hidden
-    cards do not block uploads); reads of a hidden card stay 404.
+    list_refresh_requests. Every other action that it applies to is a 403.
+  * `notes: false` strips notes and makes set_note and list_notes a 403.
+  * `merchant_names: false` replaces descriptions with opaque merchant ids.
+    It also stops searches from matching descriptions.
+  * Every row that names a card or an account carries `resource_ref`. The
+    broker's post-filter can then drop anything that this code let through.
+  * `ingest_snapshot` answers only to the company's visibility, so hidden
+    cards do not block uploads. Reads of a hidden card stay 404.
 
-`resolve` and `label` apply no visibility: they serve the owner's console
-and approval cards, and the broker filters `resolve` for agents itself.
+`resolve` and `label` apply no visibility. They serve the owner's console and
+approval cards, and the broker itself filters `resolve` for agents.
 Transactions have no resolve at all (see the manifest).
 """
 
@@ -54,9 +57,9 @@ _CURSOR_SEP = "|"
 
 
 class NoneConnection:
-    """Connection kind `none`: the plugin holds no credential at all, so
-    there is nothing to pair, mint or disconnect (the echo test plugin's
-    pattern)."""
+    """Connection kind `none`. The plugin holds no credential at all, so it
+    has nothing to pair, mint or disconnect. The echo test plugin uses the
+    same pattern."""
 
     def start(self, enabled_plugins: list[str]) -> dict:
         return {"kind": "none"}
@@ -109,9 +112,9 @@ class FinanceAdapter:
             "ingest_snapshot": self._ingest_snapshot,
             "report_refresh": self._report_refresh,
         }
-        # The manifest is the contract the broker enforces against; an action
-        # it declares that this code does not implement (or the reverse) is a
-        # packaging bug, so the container refuses to start.
+        # The manifest is the contract that the broker enforces. If it
+        # declares an action that this code does not implement, or the
+        # reverse, that is a packaging bug. The container then does not start.
         declared = {a["name"] for a in self.manifest.get("actions", [])}
         if declared != set(self._actions):
             raise RuntimeError(f"manifest/adapter action mismatch: "
@@ -120,12 +123,12 @@ class FinanceAdapter:
     # ---- lifecycle -------------------------------------------------------------
 
     def configure(self, config: dict, secrets) -> None:
-        """Nothing is configurable over the network, on purpose: the database
-        path is this container's env (FINANCE_DB), so nothing that reaches
+        """Nothing is configurable over the network, on purpose. The database
+        path comes from this container's env (FINANCE_DB). No call to
         /configure can point the plugin at another file."""
 
     def status(self) -> dict:
-        """503 (from the store) when the database cannot be opened."""
+        """503 (from the store) when the store cannot open the database."""
         with self.store.read() as conn:
             sources = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
             count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
@@ -149,7 +152,7 @@ class FinanceAdapter:
         if kind not in ("card", "account", "company", "transaction"):
             raise AdapterError(400, f"unknown resource kind {kind!r}")
         if kind not in ("card", "account") or not (query or "").strip():
-            return []                     # companies and transactions are not looked up by name
+            return []                     # companies and transactions have no lookup by name
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise AdapterError(400, "limit must be an integer")
         return self.store.resolve(kind, query, max(1, min(limit, RESOLVE_LIMIT)))
@@ -172,8 +175,9 @@ class FinanceAdapter:
         return Result(data=handler(params, CallScope(scope, self._forms)))
 
     def _view(self, call: CallScope, *, window: bool = True) -> View:
-        """What the SQL may see for this call. One method, so a test can make
-        the adapter 'leak' and prove the broker's post-filter still holds."""
+        """What the SQL can see for this call. It is one method, so a test can
+        make the adapter 'leak' and prove that the broker's post-filter still
+        holds."""
         days = call.bound("date_window_days") if window else None
         return View(card=call.vis("card"), account=call.vis("account"),
                     transaction=call.vis("transaction"), company=call.vis("company"),
@@ -186,8 +190,8 @@ class FinanceAdapter:
 
     def _filters(self, conn, params: dict, view: View, *, allow_month: bool = False,
                  **extra) -> st.Filters:
-        """The caller's `source` (404 unless it exists and is visible: a
-        hidden card is a missing card) and date filters."""
+        """The caller's `source` and date filters. The `source` gets a 404
+        unless it exists and is visible: a hidden card is a missing card."""
         start, end, _ = p.period(params, allow_month=allow_month)
         return st.Filters(source=self._visible_source(conn, params, view), start=start,
                           end=end, **extra)
@@ -395,8 +399,8 @@ class FinanceAdapter:
                                     self.clock)
 
     def _request_refresh(self, params: dict, call: CallScope) -> dict:
-        # modes: [draft]: the broker only ever delivers this after the owner
-        # approved it, so arriving here IS the approval.
+        # modes: [draft]. The broker delivers this call only after the owner
+        # approves it, so its arrival here IS the approval.
         return refresh.create_approved(self.store, params, call.request_id, self.clock)
 
     def _ingest_snapshot(self, params: dict, call: CallScope) -> dict:

@@ -1,13 +1,17 @@
 """The finance plugin end to end inside the gateway's broker.
 
-finance-plugin-plan.md section 6, "Broker": the scraper key (A) uploads
-through REST and the analysis key (B) reads; each is refused the other's
-actions; a hidden card is the same 404 as a missing one and moves no total;
-a refresh request is always a draft, approved by the owner, then claimed and
-completed by A and seen by B; MCP lists finance tools per key. Plus the
-broker's own guarantees around the plugin: the post-filter holds if the
-plugin leaks, a 503 releases the write reservation, and a plugin offering
-another manifest version is refused at discovery.
+finance-plugin-plan.md section 6, "Broker":
+  * The scraper key (A) uploads through REST, and the analysis key (B) reads.
+  * The broker rejects each key's calls to the other key's actions.
+  * A hidden card gets the same 404 as a missing one and moves no total.
+  * A refresh request is always a draft. The owner approves it, then A
+    claims and completes it, and B sees it.
+  * MCP lists finance tools per key.
+The tests also cover what the broker itself makes sure of around the plugin:
+  * The post-filter holds if the plugin leaks.
+  * A 503 releases the write reservation.
+  * At discovery, the broker rejects a plugin that offers another manifest
+    version.
 """
 
 import json

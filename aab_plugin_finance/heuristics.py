@@ -1,22 +1,24 @@
 """The classification rules of cred-analysis `src/analysis.js`, ported verbatim.
 
-The owner's workbook numbers come from analysis.js, so the plugin must
-classify exactly the same way or its totals would not match them:
+The owner's workbook numbers come from analysis.js. The plugin must classify
+exactly the same way, or its totals would not match the workbook:
+  * merchantKey(s): normalizeDescription(s).toLowerCase(). It collapses
+    whitespace runs to one space, trims the text and lowercases it.
+  * TRANSFER: money movements (transfers, Bit, loans, cash advance). The
+    regex matches them against the description.
+  * ILS: {'', 'ILS', 'NIS', '₪'}. An original currency outside this set, in
+    uppercase, is foreign.
+  * cv(xs): population standard deviation / mean. It is 0 below two values
+    or at a zero mean.
 
-  merchantKey(s)   normalizeDescription(s).toLowerCase(): whitespace runs
-                   collapsed to one space, trimmed, lowercased
-  TRANSFER         money movements (transfers, Bit, loans, cash advance),
-                   matched against the description
-  ILS              {'', 'ILS', 'NIS', '₪'}: an original currency outside it
-                   (uppercased) is foreign
-  cv(xs)           population standard deviation / mean; 0 below two values
-                   or at a zero mean
-
-Two JavaScript semantics are reproduced on purpose rather than Python's:
-`\\s` and `trim()` use JavaScript's whitespace set (no \\x1c-\\x1f or \\x85,
-plus U+FEFF), and the regex's `\\b` is JavaScript's ASCII word boundary (a
-Hebrew letter is not a "word" character there, so "ביטBIT" still has a
-boundary before "BIT"). Python's defaults differ on both.
+This code reproduces two JavaScript semantics on purpose, instead of
+Python's:
+  * `\\s` and `trim()` use JavaScript's whitespace set: no \\x1c-\\x1f or
+    \\x85, plus U+FEFF.
+  * The regex's `\\b` is JavaScript's ASCII word boundary. A Hebrew letter is
+    not a "word" character there, so "ביטBIT" still has a boundary before
+    "BIT".
+Python's defaults differ on both.
 """
 
 import math
@@ -32,8 +34,8 @@ _B_END = r"(?![A-Za-z0-9_])"
 
 def _ascii_ci(word: str) -> str:
     """Case-insensitive for ASCII letters only, as JavaScript's `i` flag is in
-    practice for these words (Python's IGNORECASE would also fold, e.g., the
-    dotless i and the Kelvin sign into them)."""
+    practice for these words. Python's IGNORECASE would also fold other
+    letters into them, for example the dotless i and the Kelvin sign."""
     return "".join(f"[{c.upper()}{c.lower()}]" if c.isalpha() else re.escape(c) for c in word)
 
 
@@ -69,11 +71,11 @@ def is_foreign(original_currency: str) -> bool:
 
 
 def cv_from_sums(n: int, total: int, squares: int) -> float:
-    """cv() over n positive integers given their sum and sum of squares.
+    """cv() over n positive integers, from their sum and their sum of squares.
 
-    Exact integer arithmetic for the variance numerator (n*Σx² - (Σx)²), so
-    identical amounts give exactly 0, not a float residue: the subscription
-    test is `cv <= 0.15` and must not wobble at the edge."""
+    The variance numerator (n*Σx² - (Σx)²) uses exact integer arithmetic, so
+    identical amounts give exactly 0, not a float residue. The subscription
+    test is `cv <= 0.15`, and it must not wobble at the edge."""
     if n < 2 or total == 0:
         return 0.0
     numerator = max(0, n * squares - total * total)

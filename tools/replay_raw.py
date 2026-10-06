@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
 """Replay cred-analysis raw snapshots into the finance plugin, through the broker.
 
-The first bulk load, before the Mac uploader exists: reads the scraper's
-`data/raw/*.json` snapshots in `scrapedAt` order (as cred-analysis
-`import-raw.js` does), turns each account into rows exactly like
-`normalize.js::normalizeAccount` (same stable row key, so a later upload of
-the same transaction from the Mac merges with it instead of duplicating),
-and uploads each account as one `ingest_snapshot` run with an agent key that
-holds that action (key A):
+This is the first bulk load, before the Mac uploader exists. The tool does
+these steps:
+  1. It reads the scraper's `data/raw/*.json` snapshots in `scrapedAt` order,
+     as cred-analysis `import-raw.js` does.
+  2. It turns each account into rows exactly like
+     `normalize.js::normalizeAccount`. The rows get the same stable row key,
+     so a later upload of the same transaction from the Mac merges with the
+     row and does not make a duplicate.
+  3. It uploads each account as one `ingest_snapshot` run, with an agent key
+     that holds that action (key A).
 
-  * chunks of 400 rows, sent in order, `X-Request-Id: <run_id>-<index>`;
-  * 503 and 429 (not performed) and network errors: wait and retry, with
-    exponential backoff that honours Retry-After;
-  * 502 and 504 (outcome unknown): send the same chunk again; the plugin's
-    chunk hash makes that safe (`duplicate`, or `applied` after the apply);
-  * any other 4xx/5xx: stop, print the status and the broker's error code.
+The upload works as follows:
+  * It sends chunks of 400 rows in order, with
+    `X-Request-Id: <run_id>-<index>`.
+  * On 503 and 429 (nothing done) and on network errors, it waits and
+    retries. The exponential backoff honours Retry-After.
+  * On 502 and 504 (outcome unknown), it sends the same chunk again. The
+    plugin's chunk hash makes that safe: the answer is `duplicate`, or
+    `applied` after the apply.
+  * On any other 4xx/5xx, it stops and prints the status and the broker's
+    error code.
 
 It prints file names, source ids, run ids and counts. It never prints a
-transaction (descriptions, amounts, keys) or the key. Only the standard
-library is used, so it runs from any Python 3.11+ (time zones: the machine's
-local zone by default, which is what normalize.js used; --tz needs the
-IANA database, e.g. `pip install tzdata` on Windows).
+transaction (descriptions, amounts, row keys) or the agent key. The tool uses
+only the standard library, so it runs on any Python 3.11+. By default, dates
+use the local time zone of this machine, as normalize.js did. --tz needs the
+IANA database, for example `pip install tzdata` on Windows.
 
   AAB_KEY=aab_... python tools/replay_raw.py --raw ../cred-analysis/data/raw \\
       --url https://aab.example.com
@@ -137,7 +144,7 @@ def last4(account_number: Any) -> str:
 
 def iso_to_local_ymd(iso: Any, tz: tzinfo | None) -> str:
     """util.js isoToLocalYmd: the local calendar date of the library's ISO
-    timestamp; `tz` None is this machine's zone, like `new Date()`."""
+    timestamp. `tz` None is this machine's zone, like `new Date()`."""
     if not iso:
         return ""
     s = js_string(iso)
@@ -169,7 +176,7 @@ def normalize_account(company: str, account: dict, rng: dict | None,
             "company": company, "card": card, "date": day,
             "processedDate": iso_to_local_ymd(t.get("processedDate"), tz),
             "description": normalize_description(t.get("description")),
-            "category": normalize_description(t.get("category")),     # ?? '' is built in
+            "category": normalize_description(t.get("category")),     # already does ?? ''
             "originalAmount": num(t.get("originalAmount")),
             "originalCurrency": normalize_currency(t.get("originalCurrency")),
             "chargedAmount": num(t.get("chargedAmount")),
@@ -195,8 +202,8 @@ def normalize_account(company: str, account: dict, rng: dict | None,
 
 def to_ingest_row(row: dict) -> dict:
     """One normalizeAccount row as an ingest_snapshot row (x100 with
-    Math.round, nulls omitted). An empty currency means ILS to analysis.js;
-    the plugin needs a code, so it is sent as ILS (the key keeps '')."""
+    Math.round, nulls omitted). To analysis.js, an empty currency means ILS.
+    The plugin needs a code, so the tool sends ILS. The row key keeps ''."""
     out = {
         "key": row["key"], "date": row["date"], "processed_date": row["processedDate"],
         "description": row["description"], "category": row["category"],
@@ -220,7 +227,7 @@ _LIMITS = {"key": (1, 512), "description": (0, 500), "category": (0, 120), "memo
 
 
 def row_problem(row: dict) -> str | None:
-    """Why the plugin would refuse this row (a rule name, never content)."""
+    """Why the plugin would reject this row (a rule name, never content)."""
     for name, (low, high) in _LIMITS.items():
         if not low <= len(row[name]) <= high:
             return f"{name} length"
@@ -250,7 +257,7 @@ class Run:
 
 
 def load_snapshots(raw_dir: Path) -> list[tuple[str, dict]]:
-    """Snapshots import-raw.js would use, oldest scrape first."""
+    """The snapshots that import-raw.js would use, oldest scrape first."""
     out = []
     for path in sorted(raw_dir.glob("*.json")):
         snap = json.loads(path.read_text(encoding="utf-8"))
@@ -263,8 +270,8 @@ def load_snapshots(raw_dir: Path) -> list[tuple[str, dict]]:
 
 
 def plan_runs(snapshots: list[tuple[str, dict]], tz: tzinfo | None) -> tuple[list[Run], list[str]]:
-    """One run per account per snapshot; accounts with no usable card
-    number are reported, not uploaded."""
+    """One run per account per snapshot. The tool reports accounts with no
+    usable card number and does not upload them."""
     runs, problems = [], []
     for name, snap in snapshots:
         company = snap["company"]
@@ -299,7 +306,7 @@ def chunk_params(run: Run, index: int, total: int, rows: list[dict]) -> dict:
 # ---- HTTP ------------------------------------------------------------------------------
 
 class UploadError(Exception):
-    """The broker refused a chunk (or kept failing): stop the replay."""
+    """The broker rejected a chunk, or kept failing. Stop the replay."""
 
     def __init__(self, status: int | None, detail: str):
         super().__init__(f"{status}: {detail}")
@@ -353,8 +360,8 @@ class Client:
                 else:
                     raise UploadError(status, _error_detail(payload)) from None
             except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
-                # Not sent, or sent and the answer lost: either way the
-                # chunk is safe to send again.
+                # The chunk did not go out, or it went out and the answer did
+                # not come back. Either way, the tool can safely send it again.
                 last = type(exc).__name__
             if attempt < self.attempts:
                 delay = wait if wait is not None else min(2 ** (attempt - 1), 30)
@@ -370,7 +377,7 @@ def _retry_after(value: str | None) -> float | None:
 
 
 def upload_run(client: Client, run: Run, chunk_rows: int = CHUNK_ROWS) -> dict:
-    """Send every chunk of one run in order; return the `applied` answer."""
+    """Send every chunk of one run in order. Return the `applied` answer."""
     chunks = [run.rows[i:i + chunk_rows] for i in range(0, len(run.rows), chunk_rows)] or [[]]
     answer: dict = {}
     for index, rows in enumerate(chunks, start=1):

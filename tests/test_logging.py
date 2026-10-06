@@ -1,11 +1,12 @@
 """Nothing financial in the logs: a DEBUG sweep over every action.
 
-Planted values (a description, a memo, a category, amounts, a card id, a
-row key, the tx ids derived from them, a note, a refusal reason) go through
-uploads, reads, searches, aggregates, notes, refresh requests and the error
-paths; then not one log record, from any logger, may contain any of them.
-What the lines may carry (finance-plugin-plan.md 3.6): action, status, run
-id, chunk index, row counts, refresh ids.
+The test plants values: a description, a memo, a category, amounts, a card
+id, a row key, the tx ids made from them, a note and a refresh reason. These
+values go through uploads, reads, searches, aggregates, notes, refresh
+requests and the error paths. After that, no log record from any logger
+contains any of them. The lines can carry only these items
+(finance-plugin-plan.md 3.6): action, status, run id, chunk index, row
+counts, refresh ids.
 """
 
 import logging

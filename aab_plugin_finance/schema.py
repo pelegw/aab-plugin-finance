@@ -1,18 +1,21 @@
 """The finance database schema, created at boot, changed only additively.
 
-The plugin is the single source of record for the owner's transactions, so
-its schema follows the gateway's rule for broker.db: new tables go in
-SCHEMA, new columns in MIGRATIONS, and nothing is ever renamed or dropped.
-`apply()` is idempotent and runs on every boot (and lazily on first use if
-the volume was not ready at boot).
+The plugin is the single source of record for the owner's transactions. Its
+schema therefore follows the gateway's rule for broker.db:
+  * New tables go in SCHEMA.
+  * New columns go in MIGRATIONS.
+  * No change ever renames or drops anything.
+`apply()` is idempotent and runs on every boot. If the volume was not ready at
+boot, it runs lazily on first use.
 
-Amounts are integer hundredths (`*_x100`): exact sums, and no float ever
-needs rounding on the way in. Sign convention as in cred-analysis: negative
-= purchase, positive = refund or credit.
+Amounts are integer hundredths (`*_x100`). Sums are exact, and no float ever
+needs rounding on the way in. The sign convention is the same as in
+cred-analysis: negative = purchase, positive = refund or credit.
 
-One column beyond the approved plan's schema: `ingest_runs.source_kind`. A
-run still staging has no `sources` row yet, and `list_runs` must know a
-run's kind (card or account) to apply that kind's visibility to it.
+This schema has one column that the approved plan's schema does not have:
+`ingest_runs.source_kind`. A run that is still staging has no `sources` row
+yet. `list_runs` must know the kind of a run (card or account) to apply that
+kind's visibility to it.
 """
 
 import sqlite3
@@ -117,8 +120,9 @@ SCHEMA = (
         run_ids TEXT NOT NULL DEFAULT '[]')""",
 )
 
-# (table, column, column definition) added to an existing database. Empty
-# at version 1; a later column is appended here, never edited in SCHEMA alone.
+# (table, column, column definition) to add to an existing database. It is
+# empty at version 1. Append each later column here. Never add a column only
+# to SCHEMA.
 MIGRATIONS: tuple[tuple[str, str, str], ...] = ()
 
 

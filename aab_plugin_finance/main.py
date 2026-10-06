@@ -1,26 +1,28 @@
 """Build the plugin-finance app from the container's environment.
 
-The container receives only its own values (the installer renders them from
-aab-plugin.yaml); the names are generic so the image does not care which
-.env variable fed them:
+The container receives only its own values. The installer sets them from
+aab-plugin.yaml. The names are generic, so the image does not care which .env
+variable fed them:
+  * PLUGIN_TOKEN: the broker's X-Plugin-Token for this service (mandatory).
+  * PLUGIN_SECRETS_KEY: the Fernet key for this service's secret store. The
+    store holds nothing, because config_schema is empty and no credential
+    exists.
+  * PLUGIN_SECRETS_DIR: where that store lives (the /secrets volume).
+  * FINANCE_DB: the database, in this service's own finance_data volume.
+  * TZ / FINANCE_TZ: the owner's time zone for calendar dates. The default is
+    Asia/Jerusalem. When both exist, FINANCE_TZ wins.
 
-  PLUGIN_TOKEN        the broker's X-Plugin-Token for this service (required)
-  PLUGIN_SECRETS_KEY  Fernet key for this service's secret store (holds
-                      nothing: config_schema is empty and no credential exists)
-  PLUGIN_SECRETS_DIR  where that store lives (the /secrets volume)
-  FINANCE_DB          the database, in this service's own finance_data volume
-  TZ / FINANCE_TZ     the owner's time zone for calendar dates (default
-                      Asia/Jerusalem; FINANCE_TZ wins when both are set)
+`aab_plugin_runtime.from_env` reads the first three. With an empty
+PLUGIN_TOKEN, the service does not boot, because an open plugin API must fail
+loudly.
 
-The first three are read by `aab_plugin_runtime.from_env`; an empty
-PLUGIN_TOKEN refuses to boot (an open plugin API must fail loudly).
-
-The schema is created at boot. If the volume is not writable yet the
-service still starts, reports 503 health, and creates the schema on the
+The plugin creates the schema at boot. If the volume is not writable yet, the
+service still starts and reports 503 health. It then creates the schema on the
 first request that can open the file.
 
-Served as a factory (`uvicorn --factory aab_plugin_finance.main:create_app`)
-so importing this module reads no environment.
+uvicorn serves this module as a factory
+(`uvicorn --factory aab_plugin_finance.main:create_app`), so an import of this
+module reads no environment.
 """
 
 import logging
@@ -56,8 +58,9 @@ def build_adapter(environ: Mapping[str, str]) -> FinanceAdapter:
 
 def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     env = os.environ if environ is None else environ
-    # serve() configures logging too, but only after the adapter (and so the
-    # store's boot lines) exists; doing it first puts those lines in the
-    # service's format. A second configure() is a no-op.
+    # serve() also configures logging, but only after the adapter exists. By
+    # then the store has already logged its boot lines. A call here first
+    # puts those lines in the service's format. A second configure() is a
+    # no-op.
     logging_setup.configure(f"plugin-{SERVICE}", dict(env))
     return from_env([build_adapter(env)], dict(env), service=SERVICE)

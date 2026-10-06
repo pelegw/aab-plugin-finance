@@ -1,20 +1,23 @@
 """Agent notes on transactions: `set_note` and `list_notes`.
 
-A note is keyed by the transaction's row key, so it survives every later
-upload of the same row (the merge never touches the notes table) and goes
-away only with the row itself (a stale pending row, ON DELETE CASCADE),
-exactly as the workbook's Notes column behaved. Every write is appended to
-`note_history` with the broker's request id, so the decision record and the
-note can be matched.
+The key of a note is the transaction's row key. The note therefore survives
+every later upload of the same row, because the merge never touches the notes
+table. The note goes away only with the row itself, for example a stale
+pending row (ON DELETE CASCADE). The workbook's Notes column behaved exactly
+the same way. Every write adds a line to `note_history` with the broker's
+request id, so that the owner can match the note to the decision record.
 
-Visibility: a note can be written only on a transaction the caller could
-read (its card or account visible, the transaction not hidden, inside the
-date window); anything else is the one 404 a missing transaction gets.
-`notes: false` and `detail: aggregate` make both actions a 403 before the
-database is consulted (the adapter checks them).
+Visibility: the caller can write a note only on a transaction that it can
+read. Such a transaction has these properties:
+  * Its card or account is visible.
+  * The scope does not deny the transaction itself.
+  * It is inside the date window.
+Any other transaction gets the same 404 as a missing one. `notes: false` and
+`detail: aggregate` make both actions a 403 before any database query. The
+adapter checks them.
 
-Note text is agent input that the owner and other agents will read; it is
-stored as given and never logged.
+Note text is agent input that the owner and other agents will read. The
+plugin stores it as given and never logs it.
 """
 
 import logging
@@ -56,8 +59,8 @@ def set_note(store: st.Store, view: View, tx: str, note: str, rid: str,
         conn.execute("INSERT INTO note_history (key, note, author, created_at, request_id)"
                      " VALUES (?, ?, 'agent', ?, ?)", (row["key"], note, now, request_id(rid)))
     log.info("note written %s", kv(cleared=not note))
-    # No resource_ref: the write happened, and a broker post-filter 404 on
-    # its result would tell the agent it had not.
+    # No resource_ref. The write has succeeded, and a 404 from the broker's
+    # post-filter on its result would tell the agent that the write failed.
     return {"id": tx, "note": note or None, "updated_at": now}
 
 

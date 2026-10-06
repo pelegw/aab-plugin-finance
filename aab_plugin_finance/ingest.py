@@ -1,37 +1,47 @@
-"""`ingest_snapshot`: chunked, idempotent uploads applied in one transaction.
+"""`ingest_snapshot`: chunked, idempotent uploads, applied in one database transaction.
 
-One run = one card or account of one company over one [start, end] range,
-uploaded in 1..N chunks of at most 500 rows (finance-plugin-plan.md 3.2).
+One run = one card or account of one company over one [start, end] range.
+The scraper uploads a run in 1..N chunks of at most 500 rows
+(finance-plugin-plan.md 3.2).
 
-Validation the manifest's schema cannot express, all 400 before any write:
-at most 500 rows per chunk; `run_id` is [A-Za-z0-9._-]; `source.id`
-normalizes to <company>:<digits> under the run's own company; every row
-`date` is a real YYYY-MM-DD inside [range.start, range.end]; amounts fit
-comfortably in SQLite's integers, so a SUM of amounts can never overflow
-into a 503 (sums of squares, which overflow far earlier, are computed as
-REAL in aggregates.py).
+This module also does the validation that the manifest's schema cannot
+express. Each failure is a 400 before any write:
+  * At most 500 rows per chunk.
+  * `run_id` is [A-Za-z0-9._-].
+  * `source.id` normalizes to <company>:<digits> under the run's own company.
+  * Every row `date` is a real YYYY-MM-DD inside [range.start, range.end].
+  * Amounts fit comfortably in SQLite's integers, so a SUM of amounts can
+    never overflow into a 503. Sums of squares overflow far earlier, so
+    aggregates.py calculates them as REAL.
 
-Idempotency: each chunk is stored with sha256(canonical payload). The same
-chunk again answers `duplicate`; the same index with other content is a
-409; chunks may arrive in any order, and whichever completes 1..total
-applies the run in the same transaction. A chunk for an applied run answers
-`applied` again with the run's counts (a safe replay after a lost response).
-A run still staging 24 hours after its first chunk is marked `abandoned`
-(lazily, on the next upload or list_runs) and its payloads deleted.
+Idempotency:
+  * The plugin stores each chunk with sha256(canonical payload).
+  * The same chunk again answers `duplicate`.
+  * The same index with other content is a 409.
+  * Chunks can arrive in any order. The chunk that completes 1..total
+    applies the run in the same database transaction.
+  * A chunk for an applied run answers `applied` again, with the run's
+    counts. A replay after a lost response is therefore safe.
+  * A run that is still staging 24 hours after its first chunk becomes
+    `abandoned`, and the plugin deletes its payloads. This sweep is lazy: it
+    runs on the next upload or list_runs.
 
-Merge (cred-analysis `excel.js::mergeRows`): upsert the source; insert new
-row keys with first_seen = the scrape's local date, or update every
-scraper-owned column of known keys (first_seen and notes are never
-touched), counting added / updated / unchanged; then delete pending rows of
-this source inside [start, end] that this run did not contain. Rows outside
-the range are never touched and settled rows are never deleted.
+Merge (cred-analysis `excel.js::mergeRows`):
+  1. Upsert the source.
+  2. Insert new row keys with first_seen = the local date of the scrape. For
+     known row keys, update every scraper-owned column, but never first_seen
+     or notes. Count each row as added, updated or unchanged.
+  3. Delete the pending rows of this source inside [start, end] that this
+     run did not contain.
+The merge never touches rows outside the range, and it never deletes settled
+rows.
 
-Hidden cards do not block uploads: the action is bound to the `company`
-resource, and only the company's visibility applies here, so the record
-stays complete while reads of a hidden card stay 404.
+Hidden cards do not block uploads. The resource of this action is `company`,
+and only the company's visibility applies here. The record thus stays
+complete, while reads of a hidden card stay 404.
 
-Logs carry the run id, chunk index, row counts and outcome; never a key,
-an amount, a description or a source id.
+Logs carry the run id, chunk index, row counts and outcome. They never carry
+a row key, an amount, a description or a source id.
 """
 
 import hashlib
@@ -68,8 +78,8 @@ _SOURCE = frozenset({"kind", "id", "label", "last4", "currency", "balance_x100",
 _ROW = frozenset({"key", "date", "processed_date", "description", "category", "original_x100",
                   "original_currency", "charged_x100", "charged_currency", "type",
                   "installment_number", "installment_total", "status", "identifier", "memo"})
-# The scraper-owned columns compared to count a row as updated (mergeRows'
-# SYNCED_FIELDS); first_seen and notes are not among them.
+# The scraper-owned columns that decide if a row counts as updated
+# (mergeRows' SYNCED_FIELDS). first_seen and notes are not among them.
 SYNCED = ("processed_date", "description", "category", "original_x100", "original_currency",
           "charged_x100", "charged_currency", "type", "installment_number",
           "installment_total", "status", "identifier", "memo")
@@ -137,7 +147,7 @@ def _row(raw: dict, start: str, end: str) -> dict:
     row_date = raw.get("date")
     if not p.is_date(row_date) or not start <= row_date <= end:
         raise AdapterError(400, "date must be a YYYY-MM-DD date inside the run's range")
-    # Bounded so an absurd value is a 400 here, not an overflow inside SQLite.
+    # The bounds make an absurd value a 400 here, not an overflow inside SQLite.
     number = p.integer(raw, "installment_number", minimum=1, maximum=MAX_INSTALLMENTS)
     total = p.integer(raw, "installment_total", minimum=1, maximum=MAX_INSTALLMENTS)
     status = p.choice(raw, "status", ("completed", "pending"), default="")
@@ -161,7 +171,7 @@ def _row(raw: dict, start: str, end: str) -> dict:
 
 
 def parse(params: dict) -> Chunk:
-    """Validate and normalize one chunk; raise 400 on the first problem."""
+    """Validate and normalize one chunk. Raise 400 on the first problem."""
     _no_extra(params, _TOP, "params")
     run_id = p.text(params, "run_id", required=True)
     if not RUN_ID_RE.fullmatch(run_id):
@@ -207,7 +217,7 @@ def parse(params: dict) -> Chunk:
 # ---- staging -----------------------------------------------------------------------
 
 def stage(store, chunk: Chunk, clock: Clock, company_vis: Visibility) -> dict:
-    """Store one chunk; apply the run when it completes the set."""
+    """Store one chunk. Apply the run when the chunk completes the set."""
     company_vis.check_named(chunk.company, "company")
     with store.write() as conn:
         abandoned = sweep_abandoned(conn, clock)
@@ -217,7 +227,7 @@ def stage(store, chunk: Chunk, clock: Clock, company_vis: Visibility) -> dict:
             result = _applied(run)
         else:
             result = _stage_new_chunk(conn, run, chunk, clock)
-    # Logged after COMMIT, so a line never reports what a rollback undid.
+    # Log after COMMIT, so that a line never reports what a rollback undid.
     fresh = result.pop("_fresh", False)
     log_abandoned(abandoned)
     log.info("ingest chunk %s", kv(run_id=chunk.run_id, chunk=chunk.index, total=chunk.total,
@@ -287,13 +297,14 @@ def _applied(run) -> dict:
 
 
 def log_abandoned(count: int) -> None:
-    """Called after the sweep's transaction committed."""
+    """Call this after the sweep's database transaction has committed."""
     if count:
         log.info("ingest runs abandoned %s", kv(count=count))
 
 
 def sweep_abandoned(conn: sqlite3.Connection, clock: Clock) -> int:
-    """Mark runs staging for over 24 hours abandoned and drop their payloads."""
+    """Mark runs that are staging for more than 24 hours as abandoned, and
+    drop their payloads."""
     cutoff = clock.iso_now(-ABANDON_SECONDS)
     ids = [r["run_id"] for r in conn.execute(
         "SELECT run_id FROM ingest_runs WHERE status = 'staging' AND created_at < ?", (cutoff,))]
@@ -308,7 +319,7 @@ def sweep_abandoned(conn: sqlite3.Connection, clock: Clock) -> int:
 # ---- apply -------------------------------------------------------------------------
 
 def apply_run(conn: sqlite3.Connection, run_id: str, clock: Clock) -> dict:
-    """Merge a complete run, inside the caller's transaction."""
+    """Merge a complete run, inside the caller's database transaction."""
     run = conn.execute("SELECT * FROM ingest_runs WHERE run_id = ?", (run_id,)).fetchone()
     source, rows = None, {}
     for chunk in conn.execute("SELECT payload FROM ingest_chunks WHERE run_id = ? ORDER BY idx",
@@ -316,7 +327,7 @@ def apply_run(conn: sqlite3.Connection, run_id: str, clock: Clock) -> dict:
         data = json.loads(chunk["payload"])
         source = source or data["source"]          # chunk 1's source wins
         for row in data["transactions"]:
-            rows[row["key"]] = row                 # a key repeated across chunks: the later chunk
+            rows[row["key"]] = row                 # a row key in two chunks: the later chunk wins
     seen_date = clock.local_date(run["scraped_at"] or "")
     _upsert_source(conn, source, run["company"], seen_date, run_id)
     keys = list(rows)
@@ -376,7 +387,7 @@ def _upsert_source(conn: sqlite3.Connection, source: dict, company: str, seen: s
         return
     if old["kind"] != source["kind"]:
         raise AdapterError(409, "this id is already known as another kind of source")
-    # An upload that leaves label/last4/balance empty keeps what is known.
+    # An upload that leaves label/last4/balance empty keeps the stored values.
     conn.execute(
         "UPDATE sources SET label = CASE WHEN ? != '' THEN ? ELSE label END,"
         " last4 = CASE WHEN ? != '' THEN ? ELSE last4 END, currency = ?,"

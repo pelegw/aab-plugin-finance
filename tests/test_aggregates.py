@@ -1,11 +1,11 @@
-"""Aggregates against numbers derived by hand from cred-analysis analysis.js.
+"""Aggregates against numbers calculated by hand from cred-analysis analysis.js.
 
-The fixture (26 rows on two cards, today = 2026-10-06) is built so every
-heuristic has a case on each side of its line. The expected values below
-were worked out by hand from analysis.js's rules (comments show the sums);
-nothing here is computed by the code under test. An optional cross-check
-runs the real analysis.js under Node on the same rows when Node and a
-cred-analysis checkout are available.
+The fixture has 26 rows on two cards, with today = 2026-10-06. It gives every
+heuristic a case on each side of its line. The expected values below come
+from a hand calculation with the rules of analysis.js, and the comments show
+the sums. The code under test calculates none of them. An optional
+cross-check runs the real analysis.js under Node on the same rows, when Node
+and a cred-analysis checkout are available.
 
 Rows (charged ILS; negative = purchase):
   cal:1111  SPOTIFY -19.90 x4 (Jun-Sep, one spelled "Spotify")    Streaming

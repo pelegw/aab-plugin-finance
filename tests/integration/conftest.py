@@ -1,21 +1,24 @@
 """The finance plugin inside the gateway's broker (needs a gateway checkout).
 
 The broker comes from AAB_SRC (default ../agent-authority-broker; see
-tests/gateway.py). Without one these tests are skipped, unless
-AAB_REQUIRE_GATEWAY=1 (CI), where a missing gateway is an error.
+tests/gateway.py). Without a checkout, pytest skips these tests. With
+AAB_REQUIRE_GATEWAY=1 (CI), a missing gateway is an error.
 
-The fixtures re-implement the few the gateway's broker/tests/conftest.py
-provides (`env`, `owner`, `admin_headers`, `make_agent`, `enable_plugin`,
-`runtime_factory`) instead of importing them: that module is the gateway's
-`tests` package, which would collide with this repository's own `tests`
-package. They use the same broker APIs, so they track the gateway's.
+The fixtures re-implement a few fixtures of the gateway's
+broker/tests/conftest.py: `env`, `owner`, `admin_headers`, `make_agent`,
+`enable_plugin`, `runtime_factory`. They do not import them, because that
+module is the gateway's `tests` package. It would collide with this
+repository's own `tests` package. The fixtures use the same broker APIs, so
+they track the gateway's fixtures.
 
-Registration uses the gateway's test seam: the registry is built with
-`Registry(vendored_dirs=(<tmp>,))` where <tmp>/finance/manifest.yaml is this
-plugin's manifest (standing in for the owner's pin), and the adapter is
-registered either in process (`register_in_process`) or over the plugin API
-(`discover` with the runtime app behind a TestClient, as production does
-through RemoteAdapter). Every test using `finance` runs on both transports.
+Registration uses the gateway's test seam:
+  * The registry comes from `Registry(vendored_dirs=(<tmp>,))`. There,
+    <tmp>/finance/manifest.yaml is this plugin's manifest, in place of the
+    owner's pin.
+  * The fixtures register the adapter in process (`register_in_process`) or
+    over the plugin API. The second way uses `discover` with the runtime app
+    behind a TestClient, as production does through RemoteAdapter.
+Every test that uses `finance` runs on both transports.
 """
 
 import os
